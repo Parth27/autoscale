@@ -1,8 +1,8 @@
 package autoscale.server;
 
+import java.io.IOException;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.IOException;
 
 public class ClientHandler implements Runnable {
     private String name;
@@ -21,14 +21,16 @@ public class ClientHandler implements Runnable {
     }
     @Override
     public void run() {
-        while (running) {
-            try {
-                Thread.sleep((long) 15000);
-            } catch (InterruptedException e) {
-                running = false;
-            }
-        }
         try {
+            while (running) {
+                // try {
+                //     Thread.sleep((long) 15000);
+                // } catch (InterruptedException e) {
+                //     running = false;
+                // }
+                String input = dis.readUTF();
+                System.out.println(input);                
+            }
             this.dis.close();
             this.dos.close();
         } catch (IOException e) {
