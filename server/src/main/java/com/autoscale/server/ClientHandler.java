@@ -1,4 +1,4 @@
-package autoscale.server;
+package com.autoscale.server;
 
 import java.io.IOException;
 import java.io.DataInputStream;

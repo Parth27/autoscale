@@ -1,4 +1,4 @@
-package autoscale.server;
+package com.autoscale.server;
 
 import java.util.HashMap;
 
