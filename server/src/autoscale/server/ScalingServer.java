@@ -16,27 +16,27 @@ public class ScalingServer {
     // counter for clients
     static int id = 0;
     public static void main(String[] args) throws IOException {
-        ServerSocket server = new ServerSocket(PORT);
-        Socket socket;
-        System.out.print("Started server");
-        while (id < 100) {
-            socket = server.accept();
-            System.out.print("New client received: "+socket);
-            
-            DataInputStream dis = new DataInputStream(socket.getInputStream());
-            DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-            ClientHandler client = new ClientHandler(id,dis,dos);
-            Thread t = new Thread(client);
+        try (ServerSocket server = new ServerSocket(PORT)) {
+            Socket socket;
+            System.out.print("Started server");
+            while (id < 100) {
+                socket = server.accept();
+                System.out.print("New client received: "+socket);
+                
+                DataInputStream dis = new DataInputStream(socket.getInputStream());
+                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+                ClientHandler client = new ClientHandler(id,dis,dos);
+                Thread t = new Thread(client);
 
-            System.out.println("Client id = "+client.id);
-            map.put(id, client);
-            t.start();
-            id++;
+                System.out.println("Client id = "+client.id);
+                map.put(id, client);
+                t.start();
+                id++;
+            }
         }
         for (int key:map.keySet()) {
             terminateClient(key);
         }
-        server.close();
     }
 
     public static void terminateClient(int id) {
