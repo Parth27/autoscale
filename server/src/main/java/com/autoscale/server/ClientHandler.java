@@ -23,11 +23,6 @@ public class ClientHandler implements Runnable {
     public void run() {
         try {
             while (running) {
-                // try {
-                //     Thread.sleep((long) 15000);
-                // } catch (InterruptedException e) {
-                //     running = false;
-                // }
                 String input = dis.readUTF();
                 System.out.println(input);                
             }

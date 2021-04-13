@@ -9,14 +9,17 @@ import java.io.IOException;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 
-public class ScalingServer {
-    static HashMap<Integer, ClientHandler> map = new HashMap<>();
+public class AutoScaleServer {
+    static HashMap<Integer, ClientHandler> clientMap = new HashMap<>();
     static HashMap<Integer, Thread> threadMap = new HashMap<>();
-    static final int PORT = 1234;
-    // counter for clients
-    static int id = 0;
-    public static void main(String[] args) throws IOException {
-        try (ServerSocket server = new ServerSocket(PORT)) {
+    int port;
+
+    public AutoScaleServer(int port) {
+        this.port = port;
+    }
+    public void run() throws IOException {
+        int id = 0; // counter for clients
+        try (ServerSocket server = new ServerSocket(port)) {
             Socket socket;
             System.out.print("Started server");
             while (id < 100) {
@@ -29,18 +32,14 @@ public class ScalingServer {
                 Thread t = new Thread(client);
 
                 System.out.println("Client id = "+client.id);
-                map.put(id, client);
+                clientMap.put(id, client);
                 t.start();
                 id++;
             }
         }
-        for (int key:map.keySet()) {
-            terminateClient(key);
-        }
     }
-
     public static void terminateClient(int id) {
-        ClientHandler client = map.get(id);
+        ClientHandler client = clientMap.get(id);
         Thread t = threadMap.get(id);
         client.terminate();
         try {
@@ -48,7 +47,15 @@ public class ScalingServer {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-        map.remove(id);
+        clientMap.remove(id);
         threadMap.remove(id);
+    }
+
+    public static void main(String[] args) throws IOException {
+        AutoScaleServer server = new AutoScaleServer(1234);
+        server.run();
+        for (int key:clientMap.keySet()) {
+            terminateClient(key);
+        }
     }
 }
