@@ -38,3 +38,5 @@ buildNumber.properties
 .vscode/
 # SSH keys
 *.pem
+# Markov chain probabilities
+probabilities.txt

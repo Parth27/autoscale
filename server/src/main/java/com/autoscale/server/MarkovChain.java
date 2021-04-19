@@ -1,20 +1,19 @@
 package com.autoscale.server;
 
-import java.util.Arrays;
-import java.util.Random;
 import java.util.HashMap;
+import java.util.Random;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.autoscale.config.MarkovChainConfig;
 
 public class MarkovChain {
-    final int WINDOW;
-    final int NUM_BINS;
-    HashMap<String, int[]> map;
+    HashMap<String, int[]> probabilities;
     float[][] matrix;
 
-    public MarkovChain(int window_size, int num_bins) {
-        WINDOW = window_size;
-        NUM_BINS = num_bins;
-        map = new HashMap<>();
-        matrix = new float[NUM_BINS][NUM_BINS];
+    public MarkovChain() {
+        probabilities = new HashMap<>();
+        matrix = new float[MarkovChainConfig.NUM_BINS][MarkovChainConfig.NUM_BINS];
     }
 
     private int argmax(int[] arr) {
@@ -28,40 +27,44 @@ public class MarkovChain {
         }
         return idx;
     }
-    private void updateChain(String[] chain, int value) {
-        for (int i=1; i < WINDOW; i++) {
-            chain[i-1] = chain[i];
+    public void updateChain(List<String> chain, int value) {
+        if (chain.size() < MarkovChainConfig.WINDOW) {
+            chain.add(String.valueOf(value));
+            return;
         }
-        chain[WINDOW-1] = String.valueOf(value);
-    }
-    public void train(int[] data) {
-        String[] chain = new String[WINDOW];
-        for (int i = 0; i < data.length; i++) {
-            if (i < WINDOW) {
-                chain[i] = String.valueOf(data[i]);
-                continue;
-            }
-            updateMatrix(chain, data[i]);
-            updateChain(chain, data[i]);
+        for (int i=1; i < MarkovChainConfig.WINDOW; i++) {
+            chain.set(i-1,chain.get(i));
         }
+        chain.set(MarkovChainConfig.WINDOW-1,String.valueOf(value));
     }
-    public int predict(String[] chain) {
+    // public void train(int[] data) {
+    //     String[] chain = new String[WINDOW];
+    //     for (int i = 0; i < data.length; i++) {
+    //         if (i < WINDOW) {
+    //             chain[i] = String.valueOf(data[i]);
+    //             continue;
+    //         }
+    //         updateMatrix(chain, data[i]);
+    //         updateChain(chain, data[i]);
+    //     }
+    // }
+    public int predict(List<String> chain) {
         String key = String.join(",",chain);
-        if (!map.containsKey(key)) {
+        if (!probabilities.containsKey(key)) {
             return 0;
         }
-        return argmax(map.get(key));
+        return argmax(probabilities.get(key));
     }
-    private void updateMatrix(String[] chain, int value) {
+    public void updateMatrix(List<String> chain, int value) {
         String key = String.join(",",chain);
-        map.computeIfAbsent(key, s -> new int[NUM_BINS]);
-        int[] counts = map.get(key);
+        probabilities.computeIfAbsent(key, s -> new int[MarkovChainConfig.NUM_BINS]);
+        int[] counts = probabilities.get(key);
         counts[value]++;
-        map.put(key, counts);
+        probabilities.put(key, counts);
     }
 
     public static void main(String[] args) {
-        MarkovChain mc = new MarkovChain(2, 10);
+        MarkovChain mc = new MarkovChain();
         Random rand = new Random(0);
         Random rand2 = new Random(0);
         int[] data = new int[10000];
@@ -73,23 +76,23 @@ public class MarkovChain {
         for (int i=0; i < 100; i++) {
             test[i] = rand2.nextInt(10);
         }
-        mc.train(data);
-        for (String key: mc.map.keySet()) {
+        // mc.train(data);
+        for (String key: mc.probabilities.keySet()) {
             System.out.println("\n"+key);
-            for (int i:mc.map.get(key)) {
+            for (int i:mc.probabilities.get(key)) {
                 System.out.print("\t"+i);
             }
         }
-        String[] chain = new String[mc.WINDOW];
+        String[] chain = new String[MarkovChainConfig.WINDOW];
         for (int i=0; i < 100; i++) {
-            if (i < mc.WINDOW) {
+            if (i < MarkovChainConfig.WINDOW) {
                 predictions[i] = 0;
                 chain[i] = String.valueOf(data[i]);
                 continue;
             }
-            predictions[i] = mc.predict(chain);
-            mc.updateMatrix(chain, test[i]);
-            mc.updateChain(chain, test[i]);
+            // predictions[i] = mc.predict(chain);
+            // mc.updateMatrix(chain, test[i]);
+            // mc.updateChain(chain, test[i]);
         }
         for (int i = 0; i < predictions.length; i++) {
             System.out.println(predictions[i]+"\t"+test[i]);
