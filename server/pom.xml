@@ -33,6 +33,12 @@
       <version>1.7.30</version>
       <scope>test</scope>
     </dependency>
+
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-ec2</artifactId>
+      <version>1.11.327</version>
+    </dependency>
   </dependencies>
 
   <build>

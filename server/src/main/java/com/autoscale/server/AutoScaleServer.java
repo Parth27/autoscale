@@ -1,10 +1,12 @@
 package com.autoscale.server;
 
+import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.InetAddress;
@@ -13,15 +15,16 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.autoscale.config.AutoScaleConfig;
 import com.autoscale.config.MarkovChainConfig;
 
 public class AutoScaleServer extends Thread {
-    HashMap<Integer, ClientHandler> clientMap = new HashMap<>();
+    ConcurrentHashMap<Integer, ClientHandler> clientMap = new ConcurrentHashMap<>();
     List<Integer> memoryData = new ArrayList<>();
     List<Integer> diskData = new ArrayList<>();
-    HashMap<Integer, Thread> threadMap = new HashMap<>();
+    ConcurrentHashMap<Integer, Thread> threadMap = new ConcurrentHashMap<>();
     private volatile boolean running = true;
     ServerSocket server;
     int serverID = 0; // counter for clients
@@ -29,6 +32,7 @@ public class AutoScaleServer extends Thread {
     MarkovChain model;
     boolean trainMode;
     List<String> serverList;
+    ConcurrentHashMap<Integer, Boolean> clientMonitor;
 
     public AutoScaleServer(boolean trainMode) throws IOException {
         server = new ServerSocket(AutoScaleConfig.PORT);
@@ -37,16 +41,7 @@ public class AutoScaleServer extends Thread {
         model = new MarkovChain();
         chain = new ArrayList<>();
         serverList = new ArrayList<>();
-    }
-
-    public void terminate() throws IOException {
-        System.out.println("Saving model....");
-
-        try (FileOutputStream fStream = new FileOutputStream("/home/parth/autoscale/probabilities.txt");
-                ObjectOutputStream oOutputStream = new ObjectOutputStream(fStream)) {
-            oOutputStream.writeObject(model.probabilities);
-        }
-        server.close();
+        clientMonitor = new ConcurrentHashMap<>();
     }
 
     private void loadModel(String filepath) throws IOException, ClassNotFoundException {
@@ -56,37 +51,67 @@ public class AutoScaleServer extends Thread {
         }
     }
 
-    public void initialize(int numServers) throws IOException, InterruptedException {
-        String[] script = { "sh", AutoScaleConfig.STARTUP_SCRIPT };
-        Socket socket;
-        for (int i = 0; i < numServers; i++) {
-            Process p = Runtime.getRuntime().exec(script);
-            p.waitFor();
-            socket = server.accept();
-            String ip = socket.getRemoteSocketAddress().toString();
-            System.out.println("New client received: " + socket);
-            System.out.println("IP: " + ip);
-
-            DataInputStream dis = new DataInputStream(socket.getInputStream());
-            DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-            ClientHandler client = new ClientHandler(serverID, dis, dos, this, ip);
-            Thread t = new Thread(client);
-
-            System.out.println("Kafka server started, id = " + client.id);
-            clientMap.put(serverID, client);
-            threadMap.put(serverID, t);
-            serverID++;
-            socket.close();
-            serverList.add(ip + ":9092");
+    private void startServers() throws IOException, InterruptedException {
+        String[] script;
+        for (int id : clientMap.keySet()) {
+            ClientHandler client = clientMap.get(id);
+            script = new String[]{ "sh", AutoScaleConfig.SERVER_START, client.ip };
+            try {
+                System.out.println(client.ip);
+                Process p = new ProcessBuilder(script).start();
+                p.waitFor();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            threadMap.get(id).start();
         }
+    }
+
+    private void createTopic() throws IOException {
+        String[] script = { "sh", AutoScaleConfig.TOPIC_SCRIPT, AutoScaleConfig.ZOOKEEPER_IP };
+        try {
+            Process p = new ProcessBuilder(script).start();
+            p.waitFor();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void pingProducer() throws IOException {
         InetAddress producerIP = InetAddress.getByName(AutoScaleConfig.PRODUCER_IP);
         try (Socket producerSocket = new Socket(producerIP, AutoScaleConfig.PRODUCER_PORT)) {
             DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
             dos.writeUTF(String.join(",", serverList));
         }
-        for (Thread t : threadMap.values()) {
-            t.start();
+    }
+
+    public void initialize(int numServers) throws IOException, InterruptedException {
+        String[] script = { "sh", AutoScaleConfig.INSTANCE_START };
+        for (int i = 0; i < numServers; i++) {
+            Process p = new ProcessBuilder(script).start();;
+            BufferedReader processInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String instanceID = processInput.readLine();
+            String ip = processInput.readLine();
+            System.out.println("AWS EC2 Instance created with ID: "+instanceID);
+            p.waitFor();
+            // String ip = socket.getRemoteSocketAddress().toString().split("/")[1];
+            System.out.println("IP: " + ip);
+
+            ClientHandler client = new ClientHandler(serverID, this, ip, instanceID, server);
+            Thread t = new Thread(client);
+
+            System.out.println("Kafka server started, id = " + client.id);
+            clientMap.put(serverID, client);
+            threadMap.put(serverID, t);
+            clientMonitor.put(serverID,true);
+            serverID++;
+            serverList.add(ip + ":9092");
         }
+        startServers();
+        createTopic();
+        System.out.println("Topic Messages created...");
+        // Interrupt the producer to update its server list
+        pingProducer();
     }
 
     @Override
@@ -98,17 +123,18 @@ public class AutoScaleServer extends Thread {
             }
             // For training the model
             while (running) {
-                synchronized (this) {
-                    int readyClients = 0;
-                    while (readyClients < serverID) {
-                        wait();
-                        readyClients++;
-                    }
+                while (clientMonitor.size() > 0) {
+                    // Do nothing
+                }
+                System.out.println("Num clients ready: "+(serverID - clientMonitor.size()));
+                for (int id : clientMap.keySet()) {
+                    clientMonitor.put(id, true);
                 }
                 int maxResourceVal = 0;
                 for (ClientHandler client : clientMap.values()) {
                     maxResourceVal = Math.max(maxResourceVal, client.diskUsage);
                 }
+                System.out.println("Max Disk Usage: "+maxResourceVal);
                 if (chain.size() == MarkovChainConfig.WINDOW) {
                     model.updateMatrix(chain, maxResourceVal);
                 }
@@ -126,12 +152,12 @@ public class AutoScaleServer extends Thread {
         loadModel(AutoScaleConfig.MODEL_FILE);
 
         while (running) {
-            synchronized (this) {
-                int readyClients = 0;
-                while (readyClients < serverID) {
-                    wait();
-                    readyClients++;
-                }
+            while (clientMonitor.size() > 0) {
+                // Do nothing
+            }
+            System.out.println("Num clients ready: "+(serverID - clientMonitor.size()));
+            for (int id : clientMap.keySet()) {
+                clientMonitor.put(id, true);
             }
             int maxResourceVal = 0;
             for (ClientHandler client : clientMap.values()) {
@@ -149,8 +175,7 @@ public class AutoScaleServer extends Thread {
         }
     }
 
-    public void terminateClient(int id) throws IOException {
-        System.out.println("Stoping servers...");
+    public void terminateClient(int id) throws IOException, InterruptedException {
         ClientHandler client = clientMap.get(id);
         Thread t = threadMap.get(id);
         client.terminate();
@@ -164,15 +189,27 @@ public class AutoScaleServer extends Thread {
     }
 
     class ServerStop extends Thread {
+        private void terminate() throws IOException {
+            System.out.println("Saving model....");
+    
+            try (FileOutputStream fStream = new FileOutputStream("/home/parth/autoscale/probabilities.txt");
+                    ObjectOutputStream oOutputStream = new ObjectOutputStream(fStream)) {
+                oOutputStream.writeObject(model.probabilities);
+            }
+            server.close();
+        }
+
         @Override
         public void run() {
             try {
+                System.out.println("Stoping servers...");
                 for (int key : clientMap.keySet()) {
                     terminateClient(key);
                 }
                 terminate();
-            } catch (IOException e) {
-                // Do nothing
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+                Thread.currentThread().interrupt();
             }
         }
     }
