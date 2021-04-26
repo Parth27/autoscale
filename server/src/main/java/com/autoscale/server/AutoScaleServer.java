@@ -1,24 +1,24 @@
 package com.autoscale.server;
 
 import java.io.BufferedReader;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.net.InetAddress;
 import java.net.ServerSocket;
-import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.autoscale.application.kafka.KafkaBroker;
+import com.autoscale.application.kafka.KafkaMetaServer;
 import com.autoscale.config.AutoScaleConfig;
 import com.autoscale.config.MarkovChainConfig;
+import com.autoscale.core.ApplicationServer;
+import com.autoscale.core.MetaServer;
 
 public class AutoScaleServer extends Thread {
     ConcurrentHashMap<Integer, ClientHandler> clientMap = new ConcurrentHashMap<>();
@@ -33,6 +33,7 @@ public class AutoScaleServer extends Thread {
     boolean trainMode;
     List<String> serverList;
     ConcurrentHashMap<Integer, Boolean> clientMonitor;
+    MetaServer metaServer;
 
     public AutoScaleServer(boolean trainMode) throws IOException {
         server = new ServerSocket(AutoScaleConfig.PORT);
@@ -42,80 +43,56 @@ public class AutoScaleServer extends Thread {
         chain = new ArrayList<>();
         serverList = new ArrayList<>();
         clientMonitor = new ConcurrentHashMap<>();
+        metaServer = new KafkaMetaServer(); // Either remove or replace with your application's implementation
+                                            // of MetaServer
     }
 
-    private void loadModel(String filepath) throws IOException, ClassNotFoundException {
-        try (FileInputStream fStream = new FileInputStream(filepath);
-                ObjectInputStream oInputStream = new ObjectInputStream(fStream)) {
-            model.probabilities = (HashMap<String, int[]>) oInputStream.readObject();
-        }
-    }
-
-    private void startServers() throws IOException, InterruptedException {
-        String[] script;
-        for (int id : clientMap.keySet()) {
-            ClientHandler client = clientMap.get(id);
-            script = new String[]{ "sh", AutoScaleConfig.SERVER_START, client.ip };
-            try {
-                System.out.println(client.ip);
-                Process p = new ProcessBuilder(script).start();
-                p.waitFor();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-            threadMap.get(id).start();
-        }
-    }
-
-    private void createTopic() throws IOException {
-        String[] script = { "sh", AutoScaleConfig.TOPIC_SCRIPT, AutoScaleConfig.ZOOKEEPER_IP };
-        try {
-            Process p = new ProcessBuilder(script).start();
-            p.waitFor();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void pingProducer() throws IOException {
-        InetAddress producerIP = InetAddress.getByName(AutoScaleConfig.PRODUCER_IP);
-        try (Socket producerSocket = new Socket(producerIP, AutoScaleConfig.PRODUCER_PORT)) {
-            DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
-            dos.writeUTF(String.join(",", serverList));
-        }
-    }
-
-    public void initialize(int numServers) throws IOException, InterruptedException {
+    public void startServers(int numServers) throws IOException, InterruptedException {
         String[] script = { "sh", AutoScaleConfig.INSTANCE_START };
         for (int i = 0; i < numServers; i++) {
-            Process p = new ProcessBuilder(script).start();;
+            Process p = new ProcessBuilder(script).start();
             BufferedReader processInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String instanceID = processInput.readLine();
             String ip = processInput.readLine();
-            System.out.println("AWS EC2 Instance created with ID: "+instanceID);
+            System.out.println("AWS EC2 Instance created with ID: " + instanceID);
             p.waitFor();
-            // String ip = socket.getRemoteSocketAddress().toString().split("/")[1];
             System.out.println("IP: " + ip);
+            ApplicationServer applicationServer = new KafkaBroker(ip, instanceID); // Replace with your application's
+                                                                                   // implementation of
+                                                                                   // ApplicationServer
 
-            ClientHandler client = new ClientHandler(serverID, this, ip, instanceID, server);
+            ClientHandler client = new ClientHandler(serverID, this, ip, instanceID, server, applicationServer);
             Thread t = new Thread(client);
 
             System.out.println("Kafka server started, id = " + client.id);
             clientMap.put(serverID, client);
             threadMap.put(serverID, t);
-            clientMonitor.put(serverID,true);
+            clientMonitor.put(serverID, true);
             serverID++;
             serverList.add(ip + ":9092");
         }
-        startServers();
-        createTopic();
-        System.out.println("Topic Messages created...");
-        // Interrupt the producer to update its server list
-        pingProducer();
+        for (int id : clientMap.keySet()) {
+            ApplicationServer applicationServer = clientMap.get(id).applicationServer;
+            applicationServer.initialize();
+            threadMap.get(id).start();
+        }
+        syncServers();
+        metaServer.runDemo(serverList);
+    }
+
+    public void stopServers(int numServers) throws InterruptedException {
+        for (int i = 0; i < numServers; i++) {
+            int id = serverID - 1;
+            terminateClient(id);
+            serverList.remove(serverList.size() - 1);
+            serverID--;
+        }
+        metaServer.runDemo(serverList);
     }
 
     @Override
     public void run() {
+        int offset = 100 / MarkovChainConfig.NUM_BINS;
         try {
             if (!trainMode) {
                 inference();
@@ -126,7 +103,7 @@ public class AutoScaleServer extends Thread {
                 while (clientMonitor.size() > 0) {
                     // Do nothing
                 }
-                System.out.println("Num clients ready: "+(serverID - clientMonitor.size()));
+                System.out.println("Num clients ready: " + (serverID - clientMonitor.size()));
                 for (int id : clientMap.keySet()) {
                     clientMonitor.put(id, true);
                 }
@@ -134,7 +111,7 @@ public class AutoScaleServer extends Thread {
                 for (ClientHandler client : clientMap.values()) {
                     maxResourceVal = Math.max(maxResourceVal, client.diskUsage);
                 }
-                System.out.println("Max Disk Usage: "+maxResourceVal);
+                System.out.println("Max Disk Usage: " + maxResourceVal * offset + "%");
                 if (chain.size() == MarkovChainConfig.WINDOW) {
                     model.updateMatrix(chain, maxResourceVal);
                 }
@@ -146,16 +123,60 @@ public class AutoScaleServer extends Thread {
         }
     }
 
-    public void inference() throws IOException, InterruptedException, ClassNotFoundException {
+    private void syncServers() throws InterruptedException {
+        Thread.sleep(10*1000); // Sleep until all servers are ready
+        // for (int id : clientMap.keySet()) {
+        //     ApplicationServer applicationServer = clientMap.get(id).applicationServer;
+        //     while (!applicationServer.isStarted) {
+        //         // Wait
+        //     }
+        // }
+    }
+
+    private void saveModel(String filepath) throws IOException {
+        try (FileOutputStream fStream = new FileOutputStream(filepath);
+                ObjectOutputStream oOutputStream = new ObjectOutputStream(fStream)) {
+            oOutputStream.writeObject(model.probabilities);
+        }
+    }
+
+    private void loadModel(String filepath) throws IOException, ClassNotFoundException {
+        try (FileInputStream fStream = new FileInputStream(filepath);
+                ObjectInputStream oInputStream = new ObjectInputStream(fStream)) {
+            model.probabilities = (HashMap<String, int[]>) oInputStream.readObject();
+        }
+    }
+
+    private void terminate() throws IOException {
+        System.out.println("Saving model....");
+        saveModel("/home/parth/autoscale/probabilities.txt");
+        server.close();
+    }
+
+    private void terminateClient(int id) throws InterruptedException {
+        ClientHandler client = clientMap.get(id);
+        Thread t = threadMap.get(id);
+        client.applicationServer.terminate();
+        try {
+            t.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        clientMap.remove(id);
+        threadMap.remove(id);
+    }
+
+    private void inference() throws IOException, InterruptedException, ClassNotFoundException {
         // During final inference
         // Scales if necessary based on markov chain prediction
         loadModel(AutoScaleConfig.MODEL_FILE);
+        int offset = 100 / MarkovChainConfig.NUM_BINS;
 
         while (running) {
             while (clientMonitor.size() > 0) {
-                // Do nothing
+                // Wait
             }
-            System.out.println("Num clients ready: "+(serverID - clientMonitor.size()));
+            System.out.println("Num clients ready: " + (serverID - clientMonitor.size()));
             for (int id : clientMap.keySet()) {
                 clientMonitor.put(id, true);
             }
@@ -168,37 +189,17 @@ public class AutoScaleServer extends Thread {
             }
             model.updateChain(chain, maxResourceVal);
             maxResourceVal = Math.max(maxResourceVal, model.predict(chain));
-            if (maxResourceVal > AutoScaleConfig.UPPER_LIMIT) {
-                initialize(1);
+            if (maxResourceVal >= (AutoScaleConfig.UPPER_LIMIT / offset)) {
+                startServers(1);
+                chain.clear();
+            } else if (maxResourceVal < (AutoScaleConfig.LOWER_LIMIT / offset)) {
+                stopServers(1);
                 chain.clear();
             }
         }
     }
 
-    public void terminateClient(int id) throws IOException, InterruptedException {
-        ClientHandler client = clientMap.get(id);
-        Thread t = threadMap.get(id);
-        client.terminate();
-        try {
-            t.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        clientMap.remove(id);
-        threadMap.remove(id);
-    }
-
     class ServerStop extends Thread {
-        private void terminate() throws IOException {
-            System.out.println("Saving model....");
-    
-            try (FileOutputStream fStream = new FileOutputStream("/home/parth/autoscale/probabilities.txt");
-                    ObjectOutputStream oOutputStream = new ObjectOutputStream(fStream)) {
-                oOutputStream.writeObject(model.probabilities);
-            }
-            server.close();
-        }
-
         @Override
         public void run() {
             try {
@@ -221,7 +222,7 @@ public class AutoScaleServer extends Thread {
         }
         AutoScaleServer server = new AutoScaleServer(trainMode);
         Runtime.getRuntime().addShutdownHook(server.new ServerStop());
-        server.initialize(AutoScaleConfig.STARTUP_SERVERS);
+        server.startServers(AutoScaleConfig.STARTUP_SERVERS);
         server.start();
     }
 }

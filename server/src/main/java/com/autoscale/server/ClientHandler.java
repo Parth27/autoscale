@@ -5,10 +5,9 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.concurrent.ConcurrentHashMap;
 
-import com.autoscale.config.AutoScaleConfig;
 import com.autoscale.config.MarkovChainConfig;
+import com.autoscale.core.ApplicationServer;
 
 public class ClientHandler implements Runnable {
     DataInputStream dis;
@@ -22,34 +21,30 @@ public class ClientHandler implements Runnable {
     String instanceID;
     Socket socket;
     ServerSocket autoscaleServer;
+    ApplicationServer applicationServer;
 
-    public ClientHandler(int id, AutoScaleServer parent, String ip, String instanceID, ServerSocket server) {
+    public ClientHandler(int id, AutoScaleServer parent, String ip, String instanceID, ServerSocket server, ApplicationServer applicationServer) {
         this.id = id;
         this.parent = parent;
         this.ip = ip;
         this.instanceID = instanceID;
         autoscaleServer = server;
-    }
-
-    private void initialize() throws IOException {
-        socket = autoscaleServer.accept();
-        dis = new DataInputStream(socket.getInputStream());
-        dos = new DataOutputStream(socket.getOutputStream());
-    }
-
-    public void terminate() throws IOException {
-        String[] script = { "sh", AutoScaleConfig.SERVER_TERMINATE, ip, instanceID };
-        new ProcessBuilder(script).start();
+        this.applicationServer = applicationServer;
     }
 
     @Override
     public void run() {
+        int offset = 100 / MarkovChainConfig.NUM_BINS;
         try {
             initialize();
             while (running) {
                 String[] input = dis.readUTF().split(",");
-                diskUsage = (int) Math.round(Double.parseDouble(input[0]) / MarkovChainConfig.NUM_BINS);
-                memoryUsage = (int) Math.round(Double.parseDouble(input[1]) / MarkovChainConfig.NUM_BINS);
+                diskUsage = Math.round(Math.round(Double.parseDouble(input[0])) / offset);
+                memoryUsage = Math.round(Math.round(Double.parseDouble(input[1])) / offset);
+                if (!applicationServer.isStarted) {
+                    applicationServer.isStarted = true;
+                    System.out.println("Kafka broker: "+instanceID+" started");
+                }
                 System.out.println(input[0] + "," + input[1]);
                 if (parent.clientMonitor.containsKey(id)) {
                     parent.clientMonitor.remove(id);
@@ -58,7 +53,13 @@ public class ClientHandler implements Runnable {
             this.dis.close();
             this.dos.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            // Do nothing
         }
+    }
+
+    private void initialize() throws IOException {
+        socket = autoscaleServer.accept();
+        dis = new DataInputStream(socket.getInputStream());
+        dos = new DataOutputStream(socket.getOutputStream());
     }
 }

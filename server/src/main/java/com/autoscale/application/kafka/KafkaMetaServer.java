@@ -1,0 +1,100 @@
+package com.autoscale.application.kafka;
+
+import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
+
+import com.autoscale.core.MetaServer;
+
+public class KafkaMetaServer implements MetaServer {
+    // This is a meta server required by this application for performing
+    // functionalities other than initialization and termination
+    // This class is meant to perform tasks for all servers in the cluster
+    List<String> topicList;
+
+    public KafkaMetaServer() {
+        topicList = new ArrayList<>();
+    }
+
+    @Override
+    public void run(List<String> serverList) {
+        String topic = KafkaConfig.TOPIC_NAME;
+        if (!topicList.contains(topic)) {
+            createTopic(topic);
+        } else {
+            updateTopic(topic, serverList.size(), KafkaConfig.NUM_PARTITIONS);
+            rebalancePartitions(String.join(",", serverList));
+        }
+        try {
+            pingProducer(serverList);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void runDemo(List<String> serverList) {
+        String topic = KafkaConfig.TOPIC_NAME;
+        if (!topicList.contains(topic)) {
+            createTopic(topic);
+        } else {
+            updateTopic(topic, serverList.size(), KafkaConfig.NUM_PARTITIONS);
+            rebalancePartitions(String.join(",", serverList));
+        }
+    }
+
+    private void createTopic(String topic) {
+        String[] script = { "sh", KafkaConfig.TOPIC_CREATE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, topic };
+        try {
+            Process p = new ProcessBuilder(script).start();
+            BufferedReader processInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = processInput.readLine()) != null) {
+                System.out.println(line);
+            }
+            p.waitFor();
+            topicList.add(topic);
+            System.out.println("Topic "+topic+" created...");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void updateTopic(String topic, int replication, int partitions) {
+        String[] script = { "sh", KafkaConfig.TOPIC_UPDATE_SCRIPT, KafkaConfig.ZOOKEEPER_IP,
+                String.valueOf(replication), String.valueOf(partitions) };
+        try {
+            Process p = new ProcessBuilder(script).start();
+            p.waitFor();
+            System.out.println("Topic "+topic+" updated...");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void pingProducer(List<String> serverList) throws IOException {
+        // Interrupt the producer to update its server list
+        InetAddress producerIP = InetAddress.getByName(KafkaConfig.PRODUCER_IP);
+        try (Socket producerSocket = new Socket(producerIP, KafkaConfig.PRODUCER_PORT)) {
+            DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
+            dos.writeUTF(String.join(",", serverList));
+        }
+    }
+
+    private void rebalancePartitions(String servers) {
+        // Function to reassign partitions after updating server list
+        String[] script = { "sh", KafkaConfig.REBALANCE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, servers};
+        try {
+            Process p = new ProcessBuilder(script).start();
+            p.waitFor();
+            System.out.println("Partitions rebalanced...");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
