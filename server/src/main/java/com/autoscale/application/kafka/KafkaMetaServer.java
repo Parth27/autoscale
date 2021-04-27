@@ -79,10 +79,15 @@ public class KafkaMetaServer implements MetaServer {
 
     private void pingProducer(List<String> serverList) throws IOException {
         // Interrupt the producer to update its server list
-        InetAddress producerIP = InetAddress.getByName(KafkaConfig.PRODUCER_IP);
-        try (Socket producerSocket = new Socket(producerIP, KafkaConfig.PRODUCER_PORT)) {
-            DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
-            dos.writeUTF(String.join(",", serverList));
+        String[] producerList = KafkaConfig.PRODUCER_LIST.split(",");
+        String[] address;
+        for (int i=0; i < producerList.length; i++) {
+            address = producerList[i].split(":");
+            InetAddress producerIP = InetAddress.getByName(address[0]);
+            try (Socket producerSocket = new Socket(producerIP, Integer.parseInt(address[1]))) {
+                DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
+                dos.writeUTF(String.join(",", serverList));
+            }
         }
     }
 

@@ -77,7 +77,7 @@ public class AutoScaleServer extends Thread {
             threadMap.get(id).start();
         }
         syncServers();
-        metaServer.runDemo(serverList);
+        metaServer.run(serverList);
     }
 
     public void stopServers(int numServers) throws InterruptedException {
@@ -87,7 +87,8 @@ public class AutoScaleServer extends Thread {
             serverList.remove(serverList.size() - 1);
             serverID--;
         }
-        metaServer.runDemo(serverList);
+        syncServers();
+        metaServer.run(serverList);
     }
 
     @Override

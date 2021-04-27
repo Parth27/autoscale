@@ -12,7 +12,6 @@ public class MarkovChain {
 
     public MarkovChain() {
         probabilities = new HashMap<>();
-        matrix = new float[MarkovChainConfig.NUM_BINS][MarkovChainConfig.NUM_BINS];
     }
 
     private int argmax(int[] arr) {
@@ -59,7 +58,7 @@ public class MarkovChain {
 
     public void updateMatrix(List<String> chain, int value) {
         String key = String.join(",", chain);
-        probabilities.computeIfAbsent(key, s -> new int[MarkovChainConfig.NUM_BINS]);
+        probabilities.computeIfAbsent(key, s -> new int[MarkovChainConfig.NUM_BINS+1]);
         int[] counts = probabilities.get(key);
         counts[value]++;
         probabilities.put(key, counts);
