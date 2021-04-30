@@ -1,9 +1,7 @@
 package com.autoscale.core;
 
-public abstract class ApplicationServer {
-
-    public boolean isStarted = false;
-    
+public interface ApplicationServer {
+        
     public abstract void initialize();
 
     public abstract void terminate();

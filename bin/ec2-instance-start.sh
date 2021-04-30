@@ -18,6 +18,7 @@ echo "$ip"
 
 ssh -oStrictHostKeyChecking=no -i /home/parth/kafka_project.pem ubuntu@"$ip" "
 git clone https://github.com/Parth27/kafka-package;
+sudo apt update;
 sudo apt install -y openjdk-11-jdk-headless;
 export JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64;
 export PATH=$JAVA_HOME/bin:$PATH"

@@ -4,21 +4,22 @@ import java.io.IOException;
 
 import com.autoscale.core.ApplicationServer;
 
-public class KafkaBroker extends ApplicationServer {
+public class KafkaBroker implements ApplicationServer {
     String ip;
     String cloudInstance;
+    int id;
 
-    public KafkaBroker(String ip, String cloudInstance) {
+    public KafkaBroker(String ip, String cloudInstance, int id) {
         this.ip = ip;
         this.cloudInstance = cloudInstance;
+        this.id = id;
     }
 
     @Override
     public void initialize() {
         String[] script;
-        script = new String[] { "sh", KafkaConfig.SERVER_START, ip };
+        script = new String[] { "sh", KafkaConfig.SERVER_START, ip, String.valueOf(id) };
         try {
-            System.out.println(ip);
             Process p = new ProcessBuilder(script).start();
             p.waitFor();
         } catch (Exception e) {

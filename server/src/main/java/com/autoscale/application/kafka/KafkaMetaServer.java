@@ -22,30 +22,21 @@ public class KafkaMetaServer implements MetaServer {
     }
 
     @Override
-    public void run(List<String> serverList) {
+    public void start(List<String> serverList) {
         String topic = KafkaConfig.TOPIC_NAME;
         if (!topicList.contains(topic)) {
             createTopic(topic);
-        } else {
-            updateTopic(topic, serverList.size(), KafkaConfig.NUM_PARTITIONS);
-            rebalancePartitions(String.join(",", serverList));
-        }
-        try {
-            pingProducer(serverList);
-        } catch (IOException e) {
-            e.printStackTrace();
         }
     }
 
     @Override
-    public void runDemo(List<String> serverList) {
-        String topic = KafkaConfig.TOPIC_NAME;
-        if (!topicList.contains(topic)) {
-            createTopic(topic);
-        } else {
-            updateTopic(topic, serverList.size(), KafkaConfig.NUM_PARTITIONS);
-            rebalancePartitions(String.join(",", serverList));
+    public void rebalance(List<String> serverList) {
+        System.out.println("Rebalancing topic partitions, pause producers");
+        StringBuilder serverString = new StringBuilder();
+        for (int i=0; i < serverList.size(); i++) {
+            serverString.append(i);
         }
+        rebalancePartitions(serverString.toString());
     }
 
     private void createTopic(String topic) {
@@ -91,9 +82,9 @@ public class KafkaMetaServer implements MetaServer {
         }
     }
 
-    private void rebalancePartitions(String servers) {
+    private void rebalancePartitions(String brokers) {
         // Function to reassign partitions after updating server list
-        String[] script = { "sh", KafkaConfig.REBALANCE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, servers};
+        String[] script = { "sh", KafkaConfig.REBALANCE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, brokers};
         try {
             Process p = new ProcessBuilder(script).start();
             p.waitFor();

@@ -4,7 +4,7 @@ import java.util.List;
 
 public interface MetaServer {
     
-    public void run(List<String> serverList);
+    public void start(List<String> serverList);
     
-    public void runDemo(List<String> serverList);
+    public void rebalance(List<String> serverList);
 }

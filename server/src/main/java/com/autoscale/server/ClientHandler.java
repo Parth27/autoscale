@@ -41,10 +41,6 @@ public class ClientHandler implements Runnable {
                 String[] input = dis.readUTF().split(",");
                 diskUsage = Math.round(Math.round(Double.parseDouble(input[0])) / offset);
                 memoryUsage = Math.round(Math.round(Double.parseDouble(input[1])) / offset);
-                if (!applicationServer.isStarted) {
-                    applicationServer.isStarted = true;
-                    System.out.println("Kafka broker: "+instanceID+" started");
-                }
                 System.out.println(input[0] + "," + input[1]);
                 if (parent.clientMonitor.containsKey(id)) {
                     parent.clientMonitor.remove(id);
