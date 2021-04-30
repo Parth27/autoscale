@@ -1,5 +1,4 @@
-# autoscale
-Automatic resource optimization and scaling for distributed systems on cloud
+# AutoScale: Automatic resource optimization and scaling for distributed systems on cloud
 
 'AutoScale' can be used for auto-scaling any application on any distributed system. It works by predicting the future resource usage and adding/removing application servers to prevent over and under-utilization.
 For predicting resource usage, a simple Markov chain is used, but it may be replaced by a more sophisticated model soon.
