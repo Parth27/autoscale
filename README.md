@@ -5,4 +5,4 @@ For predicting resource usage, a simple Markov chain is used, but it may be repl
 
 This system currently has in-built support for Apache Kafka on AWS EC2, with more applications and distributed platforms to be added soon. The current system can be easily extended to any other application and/or distributed environment by simply adding their respective shell scripts.
 
-On each application's server and `AutoScale` client needs to be installed which is available in this repository. For a working example, please refer this [Kafka repository](https://github.com/Parth27/kafka-package).
+On each application's server an `AutoScale` client needs to be installed which is available in this repository. For a working example, please refer this [Kafka repository](https://github.com/Parth27/kafka-package).
