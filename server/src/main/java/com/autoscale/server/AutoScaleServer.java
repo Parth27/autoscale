@@ -45,6 +45,11 @@ public class AutoScaleServer extends Thread {
         clientMonitor = new ConcurrentHashMap<>();
         metaServer = new KafkaMetaServer(); // Either remove or replace with your application's implementation
                                             // of MetaServer
+        try {
+            loadModel(AutoScaleConfig.MODEL_FILE);
+        } catch (ClassNotFoundException e) {
+            // Do Nothing
+        }
     }
 
     public void startServers(int numServers, boolean needSync) throws IOException, InterruptedException {
@@ -92,14 +97,8 @@ public class AutoScaleServer extends Thread {
         }
         metaServer.start(serverList);
         int offset = 100 / MarkovChainConfig.NUM_BINS;
+        int timestep = 1;
         try {
-            if (!trainMode) {
-                inference();
-                return;
-            }
-            System.out.println("Running in train mode");
-            loadModel(AutoScaleConfig.MODEL_FILE);
-            // For training the model
             while (running) {
                 syncClients(0);
                 int maxResourceVal = 0;
@@ -111,8 +110,28 @@ public class AutoScaleServer extends Thread {
                     model.updateWeights(chain, maxResourceVal);
                 }
                 model.updateChain(chain, maxResourceVal);
+                if (!trainMode) {
+                    // Inference
+                    int prediction = model.predict(chain);
+                    maxResourceVal = Math.max(maxResourceVal, prediction);
+                    System.out.println("Predicted max disk usage: " + prediction * offset + "%");
+                    if (maxResourceVal >= (AutoScaleConfig.UPPER_LIMIT / offset)) {
+                        System.out.println("Starting a server");
+                        startServers(1, true);
+                        metaServer.rebalance(serverList);
+                        chain.clear();
+                        timestep = 0;
+                    } else if (maxResourceVal < (AutoScaleConfig.LOWER_LIMIT / offset)
+                            && timestep > MarkovChainConfig.WINDOW) {
+                        System.out.println("Stopping a server");
+                        stopServers(1);
+                        chain.clear();
+                        timestep = 0;
+                    }
+                }
+                timestep++;
             }
-        } catch (IOException | InterruptedException | ClassNotFoundException e) {
+        } catch (IOException | InterruptedException e) {
             e.printStackTrace();
             Thread.currentThread().interrupt();
         }
@@ -126,13 +145,13 @@ public class AutoScaleServer extends Thread {
             BufferedReader processInput = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String instanceID = processInput.readLine();
             String ip = processInput.readLine();
-            System.out.println("AWS EC2 Instance created with ID: " + instanceID);
+            System.out.println("AWS EC2 Instance created with ID: " + instanceID + " and server id: " + serverID);
             p.waitFor();
             System.out.println("IP: " + ip);
             ApplicationServer applicationServer = new KafkaBroker(ip, instanceID, serverID); // Replace with your
                                                                                              // application's
-            // implementation of
-            // ApplicationServer
+                                                                                             // implementation of
+                                                                                             // ApplicationServer
 
             ClientHandler client = new ClientHandler(serverID, this, ip, instanceID, server, applicationServer);
             Thread t = new Thread(client);
@@ -194,49 +213,11 @@ public class AutoScaleServer extends Thread {
         clientMonitor.remove(id);
     }
 
-    private void inference() throws IOException, InterruptedException, ClassNotFoundException {
-        // During final inference
-        // Scales if necessary based on markov chain prediction
-        System.out.println("Running in inference mode");
-        loadModel(AutoScaleConfig.MODEL_FILE);
-        int offset = 100 / MarkovChainConfig.NUM_BINS;
-        int timestep = 1;
-
-        while (running) {
-            syncClients(0);
-            int maxResourceVal = 0;
-            for (ClientHandler client : clientMap.values()) {
-                maxResourceVal = Math.max(maxResourceVal, client.diskUsage);
-            }
-            System.out.println("Max Disk Usage: " + maxResourceVal * offset + "%");
-            if (chain.size() == MarkovChainConfig.WINDOW) {
-                model.updateWeights(chain, maxResourceVal);
-            }
-            model.updateChain(chain, maxResourceVal);
-            int prediction = model.predict(chain);
-            maxResourceVal = Math.max(maxResourceVal, prediction);
-            System.out.println("Predicted max disk usage: " + prediction * offset + "%");
-            if (maxResourceVal >= (AutoScaleConfig.UPPER_LIMIT / offset)) {
-                System.out.println("Starting a server");
-                startServers(1, true);
-                metaServer.rebalance(serverList);
-                chain.clear();
-                timestep = 0;
-            } else if (maxResourceVal < (AutoScaleConfig.LOWER_LIMIT / offset) && timestep > MarkovChainConfig.WINDOW) {
-                System.out.println("Stopping a server");
-                stopServers(1);
-                chain.clear();
-                timestep = 0;
-            }
-            timestep++;
-        }
-    }
-
     class ServerStop extends Thread {
         @Override
         public void run() {
             try {
-                System.out.println("Stoping servers...");
+                System.out.println("Stopping servers...");
                 for (int key : clientMap.keySet()) {
                     terminateClient(key);
                 }
@@ -252,6 +233,7 @@ public class AutoScaleServer extends Thread {
         boolean trainMode = true;
         if (args.length == 1 && !args[0].equals("train")) {
             trainMode = false;
+            System.out.println("Running in inference mode");
         }
         AutoScaleServer server = new AutoScaleServer(trainMode);
         Runtime.getRuntime().addShutdownHook(server.new ServerStop());

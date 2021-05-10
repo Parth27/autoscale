@@ -1,15 +1,15 @@
 package com.autoscale.application.kafka;
 
 import java.io.BufferedReader;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
-import java.net.InetAddress;
-import java.net.Socket;
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
 
 import com.autoscale.core.MetaServer;
+
+import kafka.admin.ReassignPartitionsCommand;
 
 public class KafkaMetaServer implements MetaServer {
     // This is a meta server required by this application for performing
@@ -27,16 +27,23 @@ public class KafkaMetaServer implements MetaServer {
         if (!topicList.contains(topic)) {
             createTopic(topic);
         }
+        System.out.println("Topic created, start producers");
     }
 
     @Override
     public void rebalance(List<String> serverList) {
         System.out.println("Rebalancing topic partitions, pause producers");
-        StringBuilder serverString = new StringBuilder();
-        for (int i=0; i < serverList.size(); i++) {
-            serverString.append(i);
+        // Sleep for some time to give time to interrupt producers
+        try {
+            Thread.sleep(20 * 1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        rebalancePartitions(serverString.toString());
+        StringBuilder serverString = new StringBuilder();
+        for (int i = 0; i < serverList.size(); i++) {
+            serverString.append(","+i);
+        }
+        rebalancePartitions(serverString.toString().substring(1));
     }
 
     private void createTopic(String topic) {
@@ -50,47 +57,38 @@ public class KafkaMetaServer implements MetaServer {
             }
             p.waitFor();
             topicList.add(topic);
-            System.out.println("Topic "+topic+" created...");
+            System.out.println("Topic " + topic + " created...");
         } catch (Exception e) {
             e.printStackTrace();
-        }
-    }
-
-    private void updateTopic(String topic, int replication, int partitions) {
-        String[] script = { "sh", KafkaConfig.TOPIC_UPDATE_SCRIPT, KafkaConfig.ZOOKEEPER_IP,
-                String.valueOf(replication), String.valueOf(partitions) };
-        try {
-            Process p = new ProcessBuilder(script).start();
-            p.waitFor();
-            System.out.println("Topic "+topic+" updated...");
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void pingProducer(List<String> serverList) throws IOException {
-        // Interrupt the producer to update its server list
-        String[] producerList = KafkaConfig.PRODUCER_LIST.split(",");
-        String[] address;
-        for (int i=0; i < producerList.length; i++) {
-            address = producerList[i].split(":");
-            InetAddress producerIP = InetAddress.getByName(address[0]);
-            try (Socket producerSocket = new Socket(producerIP, Integer.parseInt(address[1]))) {
-                DataOutputStream dos = new DataOutputStream(producerSocket.getOutputStream());
-                dos.writeUTF(String.join(",", serverList));
-            }
         }
     }
 
     private void rebalancePartitions(String brokers) {
         // Function to reassign partitions after updating server list
-        String[] script = { "sh", KafkaConfig.REBALANCE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, brokers};
+        System.out.println("New brokers: "+brokers);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        PrintStream ps = new PrintStream(baos);
+        PrintStream systemPStream = System.out;
+        String[] script = { "sh", KafkaConfig.REBALANCE_SCRIPT, KafkaConfig.ZOOKEEPER_IP, brokers };
         try {
             Process p = new ProcessBuilder(script).start();
             p.waitFor();
+            ReassignPartitionsCommand.main(new String[] { "--zookeeper", KafkaConfig.ZOOKEEPER_IP + ":2181",
+                    "--reassignment-json-file", KafkaConfig.REBALANCE_JSON, "--execute" });
+            Thread.sleep(5 * 1000);
+            System.setOut(ps);
+            String result = "pending";
+            while (result.contains("pending")) {
+                ReassignPartitionsCommand.main(new String[] { "--zookeeper", KafkaConfig.ZOOKEEPER_IP + ":2181",
+                        "--reassignment-json-file", KafkaConfig.REBALANCE_JSON, "--verify" });
+                result = baos.toString();
+            }
+            System.out.flush();
+            System.setOut(systemPStream);
+            System.out.println(result);
             System.out.println("Partitions rebalanced...");
         } catch (Exception e) {
-            e.printStackTrace();
+            // Do Nothing
         }
     }
 }
